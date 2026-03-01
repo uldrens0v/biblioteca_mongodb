@@ -1,0 +1,11 @@
+{
+    "require": {
+        "mongodb/mongodb": "^2.2",
+      "ext-mongodb": "*"
+    },
+  "autoload": {
+    "psr-4": {
+      "clases\\": "clasesBiblio/"
+    }
+  }
+}
