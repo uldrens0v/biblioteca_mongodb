@@ -6,134 +6,152 @@ use clases\Revista;
 use clases\Socio;
 use clases\UsuarioOcasional;
 
+function usuario_existe($dni, $collection) {
+    return $collection->findOne(['dni' => $dni]) !== null;
+}
+
+function obtenerTodosLosDocumentos($collection) {
+    $documentos = [];
+    if ($collection) {
+        $cursor = $collection->find(['tipo' => ['$in' => ['Libro', 'Revista']]]);
+        foreach ($cursor as $docData) {
+            $docObj = null;
+            if (isset($docData['tipo']) && $docData['tipo'] === 'Libro') {
+                $docObj = new Libro($docData['titulo'], $docData['codigo'], $docData['ano'] ?? 0);
+            } elseif (isset($docData['tipo']) && $docData['tipo'] === 'Revista') {
+                $docObj = new Revista($docData['codigo'], $docData['titulo']);
+            }
+
+            if ($docObj) {
+                if (!empty($docData['prestado']) && !empty($docData['usuario_dni'])) {
+                    $usuario = new Socio($docData['usuario_dni'], $docData['usuario_nombre'] ?? 'Desconocido');
+                    $docObj->setPrestadoA($usuario);
+                }
+                $documentos[] = $docObj;
+            }
+        }
+    }
+    return $documentos;
+}
+
 $mensaje = "";
 $collection = null;
 
+$uri = 'mongodb+srv://danimegaguay2_db_user:qeiulO5NgYSFGBDE@biblioteca.zdjlimd.mongodb.net/?appName=biblioteca&tlsInsecure=true&port=443';
 try {
-    $url = 'mongodb+srv://danimegaguay2_db_user:lLvH7Yf02ljBxN7L@biblioteca.zdjlimd.mongodb.net/?appName=biblioteca';
-    $client = new MongoDB\Client($url);
+    $client = new MongoDB\Client($uri, [], [
+        'driver' => [
+            'allow_invalid_hostname' => true,
+        ],
+    ]);
+
+    $client->selectDatabase('admin')->command(['ping' => 1]);
+
     $db = $client->objetosPHP;
     $collection = $db->objects;
 } catch (Exception $e) {
-    $mensaje = "error de conexión: " . $e->getMessage();
-}
-function usuario_existe($dni,$collection)
-{
-    $usuario = $collection->findOne(['tipo' => ['$in' => ['Socio', 'UsuarioOcasional']], 'dni' => $dni]);
-    return $usuario;
-
+    die("error al conectar con la base de datos");
 }
 
-    // crear libro
-    if (isset($_POST['crear_libro'])) {
-        $libro = new Libro($_POST['titulo'], $_POST['codigo'], $_POST['ano']);
+// procesamiento de todas las acciones post
+if (isset($_POST['crear_libro'])) {
+    $libro = new Libro($_POST['titulo'], $_POST['codigo'], $_POST['ano']);
+    $collection->insertOne([
+        'tipo' => 'Libro',
+        'titulo' => $libro->getTitulo(),
+        'codigo' => $libro->getCodigo(),
+        'ano' => $libro->getAnoPublicacion(),
+        'prestado' => false,
+        'usuario_dni' => null
+    ]);
+    $mensaje = "libro añadido con éxito";
+
+} elseif (isset($_POST['crear_revista'])) {
+    $revista = new Revista($_POST['codigo'], $_POST['titulo']);
+    $collection->insertOne([
+        'tipo' => 'Revista',
+        'titulo' => $revista->getTitulo(),
+        'codigo' => $revista->getCodigo(),
+        'prestado' => false,
+        'usuario_dni' => null
+    ]);
+    $mensaje = "revista añadida con éxito";
+
+} elseif (isset($_POST['crear_socio'])) {
+    if (usuario_existe($_POST['dni'], $collection)) {
+        $mensaje = "el usuario ya existe";
+    } else {
+        $socio = new Socio($_POST['dni'], $_POST['nombre']);
         $collection->insertOne([
-                'tipo' => 'Libro',
-                'titulo' => $libro->getTitulo(),
-                'codigo' => $libro->getCodigo(),
-                'ano' => $libro->getAnoPublicacion(),
-                'prestado' => false,
-                'usuario_dni' => null
+            'tipo' => 'Socio',
+            'dni' => $socio->getDNI(),
+            'nombre' => $socio->getNombre()
         ]);
-        $mensaje = "libro añadido con éxito";
-
-        // crear revista
-    } elseif (isset($_POST['crear_revista'])) {
-        $revista = new Revista($_POST['codigo'], $_POST['titulo']);
-        $collection->insertOne([
-                'tipo' => 'Revista',
-                'titulo' => $revista->getTitulo(),
-                'codigo' => $revista->getCodigo(),
-                'prestado' => false,
-                'usuario_dni' => null
-        ]);
-        $mensaje = "revista añadida con éxito";
-
-        // crear socio
-    } elseif (isset($_POST['crear_socio'])) {
-        if (usuario_existe($_POST['dni'], $collection)) {
-            $mensaje = "el usuario ya existe";
-        } else{
-            $socio = new Socio($_POST['dni'], $_POST['nombre']);
-            $collection->insertOne([
-                    'tipo' => 'Socio',
-                    'dni' => $socio->getDNI(),
-                    'nombre' => $socio->getNombre()
-            ]);
-            $mensaje = "socio creado con éxito";
-
-        }
-
-        // crear usuario ocasional
-    } elseif (isset($_POST['crear_ocasional'])) {
-        if (usuario_existe($_POST['dni'], $collection)) {
-            $mensaje = "el usuario ya existe";
-        } else {
-            $ocasional = new UsuarioOcasional($_POST['dni'], $_POST['nombre']);
-            $collection->insertOne([
-                    'tipo' => 'UsuarioOcasional',
-                    'dni' => $ocasional->getDNI(),
-                    'nombre' => $ocasional->getNombre()
-            ]);
-            $mensaje = "usuario ocasional creado con éxito";
-        }
-
-        // realizar prestamo
-    } elseif (isset($_POST['prestar'])) {
-        $codigo = $_POST['cod_doc'];
-        $dni = $_POST['dni_user'];
-
-        $usuario = $collection->findOne(['tipo' => ['$in' => ['Socio', 'UsuarioOcasional']], 'dni' => $dni]);
-        $documento = $collection->findOne(['codigo' => $codigo, 'prestado' => false]);
-
-        if ($usuario && $documento) {
-            $collection->updateOne(
-                    ['codigo' => $codigo],
-                    ['$set' => ['prestado' => true, 'usuario_dni' => $dni, 'usuario_nombre' => $usuario['nombre']]]
-            );
-            $mensaje = "prestamo realizado: " . $documento['titulo'] . " a " . $usuario['nombre'];
-        } else {
-            $mensaje = "error: usuario no existe o documento ya prestado/no encontrado";
-        }
-
-        // devolver documento
-    } elseif (isset($_POST['devuelve'])) {
-        $codigo = $_POST['cod_devuelve'];
-        $doc = $collection->findOne(['codigo' => $codigo, 'prestado' => true]);
-
-        if ($doc) {
-            $collection->updateOne(
-                    ['codigo' => $codigo],
-                    ['$set' => ['prestado' => false, 'usuario_dni' => null, 'usuario_nombre' => null]]
-            );
-            $mensaje = "documento devuelto correctamente";
-        } else {
-            $mensaje = "el documento no estaba prestado o no existe";
-        }
+        $mensaje = "socio creado con éxito";
     }
 
+} elseif (isset($_POST['crear_ocasional'])) {
+    if (usuario_existe($_POST['dni'], $collection)) {
+        $mensaje = "el usuario ya existe";
+    } else {
+        $ocasional = new UsuarioOcasional($_POST['dni'], $_POST['nombre']);
+        $collection->insertOne([
+            'tipo' => 'UsuarioOcasional',
+            'dni' => $ocasional->getDNI(),
+            'nombre' => $ocasional->getNombre()
+        ]);
+        $mensaje = "usuario ocasional creado con éxito";
+    }
+
+} elseif (isset($_POST['prestar'])) {
+    $codigo = $_POST['cod_doc'];
+    $dni = $_POST['dni_user'];
+    $usuario = $collection->findOne(['tipo' => ['$in' => ['Socio', 'UsuarioOcasional']], 'dni' => $dni]);
+    $documento = $collection->findOne(['codigo' => $codigo, 'prestado' => false]);
+
+    if ($usuario && $documento) {
+        $collection->updateOne(
+            ['codigo' => $codigo],
+            ['$set' => ['prestado' => true, 'usuario_dni' => $dni, 'usuario_nombre' => $usuario['nombre']]]
+        );
+        $mensaje = "prestamo realizado: " . $documento['titulo'] . " a " . $usuario['nombre'];
+    } else {
+        $mensaje = "error: usuario no existe o documento ya prestado";
+    }
+
+} elseif (isset($_POST['devuelve'])) {
+    $codigo = $_POST['cod_devuelve'];
+    $doc = $collection->findOne(['codigo' => $codigo, 'prestado' => true]);
+
+    if ($doc) {
+        $collection->updateOne(
+            ['codigo' => $codigo],
+            ['$set' => ['prestado' => false, 'usuario_dni' => null, 'usuario_nombre' => null]]
+        );
+        $mensaje = "documento devuelto correctamente";
+    } else {
+        $mensaje = "el documento no estaba prestado o no existe";
+    }
+}
 
 // busqueda parcial
 $resultadosBusqueda = null;
 if (isset($_GET['buscar_texto']) && !empty($_GET['buscar_texto'])) {
     $texto = $_GET['buscar_texto'];
-    $resultadosBusqueda = $collection->find([
-            'titulo' => new MongoDB\BSON\Regex($texto, 'i')
-    ]);
+    $resultadosBusqueda = $collection->find(['titulo' => new MongoDB\BSON\Regex($texto, 'i')]);
 }
 
-// lista de prestamos activos
 $informePrestamos = $collection ? $collection->find(['prestado' => true]) : [];
-
-
 ?>
 
 <!DOCTYPE html>
 <html lang="es">
 <head>
     <meta charset="UTF-8">
-    <title>Gestión Integral Biblioteca</title>
+    <title>Biblioteca ANDRES CARRERO FRAILE - MONGODB</title>
+
     <style>
+        /* bloque css abierto */
         body {
             font-family: sans-serif;
             background: #f4f4f4;
@@ -221,105 +239,127 @@ $informePrestamos = $collection ? $collection->find(['prestado' => true]) : [];
 </head>
 <body>
 
-<h1>Panel de Control Biblioteca</h1>
+<?php
+// salida de la interfaz mediante php
+echo "<h1>Panel de Control Biblioteca</h1>";
 
-<?php if ($mensaje): ?>
-    <div class="mensaje"><?php echo $mensaje; ?></div><?php endif; ?>
+if ($mensaje) {
+    echo "<div class='mensaje'>$mensaje</div>";
+}
 
-<div class="container">
+echo "<div class='container'>";
 
-    <div class="section">
+// buscador de documentos
+echo "<div class='section'>
         <h3>Buscar Documento</h3>
-        <form method="get">
-            <input type="text" name="buscar_texto" placeholder="título...">
-            <input type="submit" value="buscar">
-        </form>
-        <?php if ($resultadosBusqueda): ?>
-            <ul style="font-size: 0.9em; margin-top: 10px;">
-                <?php foreach ($resultadosBusqueda as $res): ?>
-                    <li><strong><?php echo $res['titulo']; ?></strong> (<?php echo $res['codigo']; ?>)</li>
-                <?php endforeach; ?>
-            </ul>
-        <?php endif; ?>
-    </div>
+        <form method='get'>
+            <input type='text' name='buscar_texto' placeholder='título...'>
+            <input type='submit' value='buscar'>
+        </form>";
+if ($resultadosBusqueda) {
+    echo "<ul style='font-size: 0.9em; margin-top: 10px;'>";
+    foreach ($resultadosBusqueda as $res) {
+        echo "<li><strong>" . $res['titulo'] . "</strong> (" . $res['codigo'] . ")</li>";
+    }
+    echo "</ul>";
+}
+echo "</div>";
 
-    <div class="section">
+// gestión de prestamos y devoluciones
+echo "<div class='section'>
         <h3>Préstamo / Devolución</h3>
-        <form method="post">
-            <label>Código Doc:</label> <input type="text" name="cod_doc">
-            <label>DNI Usuario:</label> <input type="text" name="dni_user">
-            <input type="submit" name="prestar" value="Realizar Préstamo">
+        <form method='post'>
+            <label>Código Doc:</label> <input type='text' name='cod_doc'>
+            <label>DNI Usuario:</label> <input type='text' name='dni_user'>
+            <input type='submit' name='prestar' value='Realizar Préstamo'>
         </form>
         <hr>
-        <form method="post">
-            <label>Código para devolver:</label> <input type="text" name="cod_devuelve">
-            <input type="submit" name="devuelve" value="Devolver Documento" style="background: #28a745;">
+        <form method='post'>
+            <label>Código para devolver:</label> <input type='text' name='cod_devuelve'>
+            <input type='submit' name='devuelve' value='Devolver Documento' style='background: #28a745;'>
         </form>
-    </div>
+    </div>";
 
-    <div class="section">
+// formulario alta de libros
+echo "<div class='section'>
         <h3>Nuevo Libro</h3>
-        <form method="post">
-            <label>Título:</label> <input type="text" name="titulo" required>
-            <label>Código:</label> <input type="text" name="codigo" required>
-            <label>Año:</label> <input type="number" name="ano" required>
-            <input type="submit" name="crear_libro" value="Guardar Libro">
+        <form method='post'>
+            <label>Título:</label> <input type='text' name='titulo' required>
+            <label>Código:</label> <input type='text' name='codigo' required>
+            <label>Año:</label> <input type='number' name='ano' required>
+            <input type='submit' name='crear_libro' value='Guardar Libro'>
         </form>
-    </div>
+    </div>";
 
-    <div class="section">
+// formulario alta de revistas
+echo "<div class='section'>
         <h3>Nueva Revista</h3>
-        <form method="post">
-            <label>Título:</label> <input type="text" name="titulo" required>
-            <label>Código:</label> <input type="text" name="codigo" required>
-            <input type="submit" name="crear_revista" value="Guardar Revista">
+        <form method='post'>
+            <label>Título:</label> <input type='text' name='titulo' required>
+            <label>Código:</label> <input type='text' name='codigo' required>
+            <input type='submit' name='crear_revista' value='Guardar Revista'>
         </form>
-    </div>
+    </div>";
 
-    <div class="section">
+// formulario alta de socios
+echo "<div class='section'>
         <h3>Nuevo Socio</h3>
-        <form method="post">
-            <label>Nombre:</label> <input type="text" name="nombre" required>
-            <label>DNI:</label> <input type="text" name="dni" required>
-            <input type="submit" name="crear_socio" value="Registrar Socio">
+        <form method='post'>
+            <label>Nombre:</label> <input type='text' name='nombre' required>
+            <label>DNI:</label> <input type='text' name='dni' required>
+            <input type='submit' name='crear_socio' value='Registrar Socio'>
         </form>
-    </div>
+    </div>";
 
-    <div class="section">
+// formulario alta de usuario ocasional
+echo "<div class='section'>
         <h3>Usuario Ocasional</h3>
-        <form method="post">
-            <label>Nombre:</label> <input type="text" name="nombre" required>
-            <label>DNI:</label> <input type="text" name="dni" required>
-            <input type="submit" name="crear_ocasional" value="Registrar Ocasional">
+        <form method='post'>
+            <label>Nombre:</label> <input type='text' name='nombre' required>
+            <label>DNI:</label> <input type='text' name='dni' required>
+            <input type='submit' name='crear_ocasional' value='Registrar Ocasional'>
         </form>
-    </div>
+    </div>";
 
-    <div class="section full-width">
+// tabla de informe general de prestamos
+echo "<div class='section full-width'>
         <h3>Informe de Préstamos Activos</h3>
         <table>
             <thead>
-            <tr>
-                <th>Tipo</th>
-                <th>Título</th>
-                <th>Código</th>
-                <th>Prestado a (DNI)</th>
-                <th>Nombre Usuario</th>
-            </tr>
-            </thead>
-            <tbody>
-            <?php foreach ($informePrestamos as $docP): ?>
                 <tr>
-                    <td><?php echo $docP['tipo']; ?></td>
-                    <td><?php echo $docP['titulo']; ?></td>
-                    <td><?php echo $docP['codigo']; ?></td>
-                    <td><?php echo $docP['usuario_dni']; ?></td>
-                    <td><?php echo $docP['usuario_nombre']; ?></td>
+                    <th>Tipo</th>
+                    <th>Título</th>
+                    <th>Código</th>
+                    <th>Prestado a (DNI)</th>
+                    <th>Nombre Usuario</th>
                 </tr>
-            <?php endforeach; ?>
-            </tbody>
+            </thead>
+            <tbody>";
+foreach ($informePrestamos as $docP) {
+    echo "<tr>
+            <td>" . ($docP['tipo'] ?? '') . "</td>
+            <td>" . ($docP['titulo'] ?? '') . "</td>
+            <td>" . ($docP['codigo'] ?? '') . "</td>
+            <td>" . ($docP['usuario_dni'] ?? '') . "</td>
+            <td>" . ($docP['usuario_nombre'] ?? '') . "</td>
+          </tr>";
+}
+echo "      </tbody>
         </table>
+    </div>";
+
+// Nuevo bloque para mostrar los objetos
+$todosLosDocumentos = obtenerTodosLosDocumentos($collection);
+echo "<div class='section full-width'>
+        <h3>Listado de Todos los Documentos</h3>
+        <ul style='list-style-type: none; padding: 0;'>";
+foreach ($todosLosDocumentos as $docObj) {
+    echo "<li style='background: #f9f9f9; margin: 5px 0; padding: 10px; border-bottom: 1px solid #eee;'>" . $docObj->toString() . "</li>";
+}
+echo "  </ul>
     </div>
-</div>
+</div>";
+?>
 
 </body>
 </html>
